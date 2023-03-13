@@ -1,8 +1,8 @@
 /*
- * HiRedis.h
+ *  RedisHelper.h
  *
- *  Created on: Sep 12, 2017
- *      Author: root
+ *  Created on: Sep 7, 2022
+ *      Author: LiyG
  */
 
 #ifndef HIREDIS_H_
@@ -27,7 +27,7 @@ public:
     static RedisHelper *GetInstance();
 
 public:
-    bool connect(const char* host = "127.0.0.1",unsigned short u_port = 6379,string strPasswd = "");
+    bool connect(string host = "127.0.0.1",unsigned short u_port = 6379,string strPasswd = "");
 
     bool subscribe(string channel, ...);
 
@@ -47,7 +47,9 @@ public:
 
     bool getMessage(string& message, string& channel);
 
-    bool disConnect();
+    void disConnect();
+
+    string getErr();
 private:
     static RedisHelper * redisHelper_;
 
@@ -60,6 +62,8 @@ private:
 	pthread_mutex_t  m_dataMutex; //线程锁
 
 	bool m_bRunFlag;
+
+    string errstr;
 };
 
 #endif /* HIREDIS_H_ */

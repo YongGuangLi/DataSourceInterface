@@ -21,8 +21,6 @@ RedisHelper::~RedisHelper() {
     redisFree(m_pContextPub);
     redisFree(m_pContextSub);
     m_bRunFlag = false;
-    m_pContextPub = NULL;
-    m_pContextSub = NULL;
     pthread_mutex_destroy(&m_dataMutex);
 }
 
@@ -36,17 +34,23 @@ RedisHelper *RedisHelper::GetInstance()
     return redisHelper_;
 }
 
-bool RedisHelper::connect(const char* host,unsigned short u_port,string strPasswd  )
+bool RedisHelper::connect(string host, unsigned short u_port, string strPasswd  )
 {
     bool result = true;
     struct timeval timeout = { 1, 500000 };
 
-    m_pContextSub = redisConnectWithTimeout(host,u_port,timeout);
+    if(m_pContextSub != NULL)
+        redisFree(m_pContextSub);
+
+    m_pContextSub = redisConnectWithTimeout(host.c_str(), u_port, timeout);
     if ( NULL == m_pContextSub || m_pContextSub->err != 0)
     {
-        printf( "%s\n", m_pContextSub->errstr );
+        errstr = m_pContextSub->errstr;
+        redisFree(m_pContextSub);
+        m_pContextSub = NULL;
         return false;
     }
+
     if(!strPasswd.empty())
     {
         redisReply *reply = (redisReply *)redisCommand(m_pContextSub,"%s %s", "AUTH", strPasswd.c_str());
@@ -55,6 +59,7 @@ bool RedisHelper::connect(const char* host,unsigned short u_port,string strPassw
             switch (reply->type)
             {
             case REDIS_REPLY_ERROR:
+                errstr = reply->str;
                 result = false;
                 break;
             default:
@@ -64,12 +69,18 @@ bool RedisHelper::connect(const char* host,unsigned short u_port,string strPassw
         }
     }
 
-    m_pContextPub = redisConnectWithTimeout(host,u_port,timeout);
+    if(m_pContextPub != NULL)
+        redisFree(m_pContextPub);
+
+    m_pContextPub = redisConnectWithTimeout(host.c_str(), u_port, timeout);
     if ( NULL == m_pContextPub || m_pContextPub->err != 0)
     {
-        printf( "%s\n", m_pContextPub->errstr );
+        errstr = m_pContextPub->errstr;
+        redisFree(m_pContextPub);
+        m_pContextPub = NULL;
         return false;
     }
+
     if(!strPasswd.empty())
     {
         redisReply *reply = (redisReply *)redisCommand(m_pContextPub,"%s %s", "AUTH", strPasswd.c_str());
@@ -78,6 +89,7 @@ bool RedisHelper::connect(const char* host,unsigned short u_port,string strPassw
             switch (reply->type)
             {
             case REDIS_REPLY_ERROR:
+                errstr = reply->str;
                 result = false;
                 break;
             default:
@@ -98,12 +110,13 @@ bool RedisHelper::subscribe(string channel, ...)
     const char* tmpChannel = channel.c_str();
     while (tmpChannel != NULL)
     {
-        redisReply * reply = (redisReply *)redisCommand( this->m_pContextSub, "SUBSCRIBE %s", tmpChannel);
+        redisReply * reply = (redisReply *)redisCommand(this->m_pContextSub, "SUBSCRIBE %s", tmpChannel);
         if (reply)
         {
             switch (reply->type)
             {
             case REDIS_REPLY_ERROR:
+                errstr = reply->str;
                 result = false;
                 break;
             default:
@@ -144,23 +157,28 @@ bool RedisHelper::set(string key, string value)
 
 bool RedisHelper::publish(string channel, string message)
 {
-    bool result = true;
+    bool result = false;
 
-    pthread_mutex_lock(&m_dataMutex);
-    redisReply *reply = (redisReply *)redisCommand( this->m_pContextPub, "PUBLISH %s %b" , channel.c_str(), message.c_str(),  (size_t) message.length());
-    pthread_mutex_unlock(&m_dataMutex);
-
-    if (reply)
+    if(this->m_pContextPub)
     {
-        switch (reply->type)
+        pthread_mutex_lock(&m_dataMutex);
+        redisReply *reply = (redisReply *)redisCommand( this->m_pContextPub, "PUBLISH %s %b" , channel.c_str(), message.c_str(),  (size_t) message.length());
+        pthread_mutex_unlock(&m_dataMutex);
+
+        if (reply)
         {
-        case REDIS_REPLY_ERROR:
-            result = false;
-            break;
-        default:
-            break;
+            switch (reply->type)
+            {
+            case REDIS_REPLY_ERROR:
+                break;
+            case REDIS_REPLY_INTEGER:
+                result = true;
+                break;
+            default:
+                break;
+            }
+            freeReplyObject(reply);
         }
-        freeReplyObject(reply);
     }
 
     return result;
@@ -168,49 +186,57 @@ bool RedisHelper::publish(string channel, string message)
 
 bool RedisHelper::publish(string channel, char *message, int length)
 {
-    bool result = true;
+    bool result = false;
 
-    pthread_mutex_lock(&m_dataMutex);
-    redisReply *reply = (redisReply *)redisCommand( this->m_pContextPub, "PUBLISH %s %b" , channel.c_str(), message,  (size_t) length);
-    pthread_mutex_unlock(&m_dataMutex);
-
-    if (reply)
+    if(this->m_pContextPub)
     {
-        switch (reply->type)
-        {
-        case REDIS_REPLY_ERROR:
-            result = false;
-            break;
-        default:
-            break;
-        }
-        freeReplyObject(reply);
-    }
+        pthread_mutex_lock(&m_dataMutex);
+        redisReply *reply = (redisReply *)redisCommand( this->m_pContextPub, "PUBLISH %s %b" , channel.c_str(), message,  (size_t) length);
+        pthread_mutex_unlock(&m_dataMutex);
 
+        if (reply)
+        {
+            switch (reply->type)
+            {
+            case REDIS_REPLY_ERROR:
+                break;
+            case REDIS_REPLY_INTEGER:
+                result = true;
+            default:
+                break;
+            }
+            freeReplyObject(reply);
+        }
+    }
     return result;
 }
 
 bool RedisHelper::lpush(string key, string message)
 {
-    bool result = true;
+    bool result = false;
 
-    pthread_mutex_lock(&m_dataMutex);
-    redisReply *reply = (redisReply *)redisCommand( this->m_pContextPub, "LPUSH %s %b" , key.c_str(), message.c_str(),  (size_t) message.length());
-    pthread_mutex_unlock(&m_dataMutex);
-
-    if (reply)
+    if(this->m_pContextPub)
     {
-        switch (reply->type)
+        pthread_mutex_lock(&m_dataMutex);
+        redisReply *reply = (redisReply *)redisCommand( this->m_pContextPub, "LPUSH %s %b" , key.c_str(), message.c_str(),  (size_t) message.length());
+        pthread_mutex_unlock(&m_dataMutex);
+
+        if (reply)
         {
-        case REDIS_REPLY_INTEGER:
-            break;
-        case REDIS_REPLY_ERROR:
-            result = false;
-            break;
-        default:
-            break;
+            switch (reply->type)
+            {
+            case REDIS_REPLY_INTEGER:
+                result = true;
+                break;
+            case REDIS_REPLY_ERROR:
+                errstr = reply->str;
+                result = false;
+                break;
+            default:
+                break;
+            }
+            freeReplyObject(reply);
         }
-        freeReplyObject(reply);
     }
 
     return result;
@@ -232,6 +258,7 @@ int RedisHelper::llen(string key)
             length = reply->integer;
             break;
         case REDIS_REPLY_ERROR:
+            errstr = reply->str;
             break;
         default:
             break;
@@ -259,6 +286,7 @@ bool RedisHelper::brpop(string key, string &message)
             result = true;
             break;
         case REDIS_REPLY_ERROR:
+            errstr = reply->str;
             break;
         default:
             break;
@@ -285,7 +313,6 @@ bool RedisHelper::getMessage(string &message)
             message = string(messageReply->str, messageReply->len);
 
             freeReplyObject( pReply );
-            pReply = NULL;
             result = true;
         }
     }
@@ -297,7 +324,6 @@ bool RedisHelper::getMessage(string &message, string &channel)
     bool result = false;
 
     redisReply * pReply = NULL;
-
     if(redisGetReply( m_pContextSub, (void **)&pReply ) == REDIS_OK )
     {
         if(pReply != NULL && pReply->elements == 3 )
@@ -309,7 +335,6 @@ bool RedisHelper::getMessage(string &message, string &channel)
             channel = string(channelReply->str, channelReply->len);
 
             freeReplyObject( pReply );
-            pReply = NULL;
             result = true;
         }
     }
@@ -318,12 +343,14 @@ bool RedisHelper::getMessage(string &message, string &channel)
 
 
 
-bool RedisHelper::disConnect()
+void RedisHelper::disConnect()
 {
     redisFree(m_pContextPub);
     redisFree(m_pContextSub);
-    m_pContextPub = NULL;
-    m_pContextSub = NULL;
-    return true;
+}
+
+string RedisHelper::getErr()
+{
+    return errstr;
 }
 
